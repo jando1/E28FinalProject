@@ -1,0 +1,7 @@
+left orange green
+right green orange
+right green green
+tape orange orange
+left orange green
+left orange orange
+right green green
