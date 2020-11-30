@@ -1,11 +1,13 @@
 import sys, os
 import numpy as np
 import project4
-from ursim import RoboSimApp, ctrl
+from ursim import RoboSimApp, ctrl, transform2d
 import numpy.linalg as linalg
 import matplotlib.pyplot as plt
 
 ######################################################################
+
+# Adds the modified new pure pursuit with the cubic
 
 class SlalomController(ctrl.Controller):
 
@@ -18,6 +20,11 @@ class SlalomController(ctrl.Controller):
         self.command_index = 0
         self.gate = None
 
+        #Initialize particle filter
+        numParticles = 20
+        self.particles = np.zeros((2, numParticles))
+        self.old_odom = None
+
         print('will do "{}" action until {}-{} gate is found'.format(
             *self.commands[0]))
 
@@ -25,10 +32,10 @@ class SlalomController(ctrl.Controller):
         # TODO: implement left/right/tape actions
 
         if action == "left":
-            cmd_vel = ctrl.ControllerOutput(.25, np.pi/4)
+            cmd_vel = ctrl.ControllerOutput(.5, np.pi/4)
         
         elif action =="right": 
-            cmd_vel = ctrl.ControllerOutput(.25, -np.pi/4)
+            cmd_vel = ctrl.ControllerOutput(.5, -np.pi/4)
 
         else: #tape 
             detections = tape_detections
@@ -43,10 +50,10 @@ class SlalomController(ctrl.Controller):
 
             pos = detections[idx].xyz_mean 
 
-            kp = 2.5
+            kp = 5
             theta_dot = kp * np.arctan2(pos[1],pos[0])
 
-            cmd_vel = cmd_vel = ctrl.ControllerOutput(0.6, theta_dot)
+            cmd_vel = cmd_vel = ctrl.ControllerOutput(0.75, theta_dot) #this was modified with higher tape gain from project 4, large time improvement
             
         return cmd_vel
 
@@ -83,26 +90,102 @@ class SlalomController(ctrl.Controller):
 
         return (a,b)
 
-    def pure_pursuit(self, T_world_from_robot, T_world_from_gate):
         
-        is_finished = False
-        # TODO: implement the pure pursuit algorithm we discussed in class
+    
+#Particle Filter
 
+    # Given an array of particles x and an action u, return a new array that
+    # is the result of the motion step of the particle filter.
+    def motion_update(self, x, u, sigma_x):
+        # TODO: add the action to the state array to get the un-corrupted
+        # new states
+        u = np.expand_dims(u,axis=1)
+        x_new= x+ np.multiply(np.ones_like(x), u)
+
+        # TODO: add Gaussian noise with standard deviation sigma_x by
+        # calling numpy.random.normal- make sure each state x gets
+        # independent noise applied to it
+        x_new+=np.random.normal(0,sigma_x,size=np.shape(x_new))
+        return x_new
+
+    # Given an array of particles x and a measurement z, return a new array
+    # that is the result of the measurement step of the particle filter.
+    def measurement_update(self, x, z, sigma_z, T_world_from_gate):
+
+        # TODO: compute weights for each particle by evaluating the Gaussian
+        # probability density function associated with the sensor model.
+        #weights=[scipy.stats.norm(depth_at(a),sigma_z).pdf(z) for a in x]
+        z = np.expand_dims(z, axis = 1)
+        #print(x)
+        print(z)
+        xnew = T_world_from_gate.transform_inv(self.particles)
+        print(xnew)
+        weights = np.exp( - (xnew - z) ** 2 /(2 * sigma_z ** 2))
+        print("weights normalized:", weights)
+
+        weights=np.divide(weights,np.expand_dims(np.sum(weights, axis = 1), axis = 1))
+        # TODO: resample particles using weights by calling np.random.choice
+        #print("weights normalized:", weights)
+        # This is an incorrect implementation that just gives a random subset
+        # by selecting uniformly with replacement. You should delete this and
+        # complete the tasks above.
+        for idx,row in enumerate(weights):
+            x[idx,:]=np.random.choice(a = row, p=weights[idx], size=len(row))
+        return x
+
+    def particle_filter(self, T_world_from_robot, T_world_from_gate):
+        sigma_x = .01
+        sigma_y = .01
+        new_position = T_world_from_robot.position
+
+        if self.old_odom is not None:
+            old_position = self.old_odom.position
+
+            action = new_position - old_position
+        else:
+            action = new_position
+
+        #Motion Step
+        self.particles = self.motion_update(self.particles, action, sigma_x)
+
+        if T_world_from_gate is not None:
+            #Measurement Step
+
+            T_robot_from_gate = T_world_from_robot.inverse() * T_world_from_gate
+            robot_in_gate_frame = T_robot_from_gate.inverse().position
+
+            measurement = T_world_from_gate.position
+            #print("measurement", measurement)
+            #print("mean position", np.mean(self.particles, axis = 1))
+            self.particles = self.measurement_update(self.particles, measurement, sigma_y, T_world_from_gate)
+
+        return np.mean(self.particles, axis=1)
+
+
+
+    def pure_pursuit(self, T_world_from_robot, T_world_from_gate):
+        is_finished = False
+        
+        position_in_world_frame = self.particle_filter(T_world_from_robot, T_world_from_gate)
+        T_world_from_robot.position = position_in_world_frame
         # Establish the position of the robot in the gate coordinate frame. 
         T_robot_from_gate = T_world_from_robot.inverse() * T_world_from_gate
         robot_in_gate_frame = T_robot_from_gate.inverse().position
-        print(robot_in_gate_frame[1])
-        print("Robot angle cotangent in gate frame:", robot_in_gate_frame[1]/robot_in_gate_frame[0])
+        #print(robot_in_gate_frame[1])
+        #print("Robot angle cotangent in gate frame:", robot_in_gate_frame[1]/robot_in_gate_frame[0])
 
-        print("Robot position in gate frame: ", robot_in_gate_frame)
+        #print("Robot position in gate frame: ", robot_in_gate_frame)
+        alpha = 0.7
 
         if robot_in_gate_frame[0] > 0:
             is_finished = True
-
-        alpha = 0.7
-        (a,b) = self.find_cubic(T_world_from_robot, T_world_from_gate)
+        
         x = robot_in_gate_frame[0] + alpha
-        y = a * x ** 3 + b * x ** 2
+        if x > 0:
+            y = 0
+        else:
+            (a,b) = self.find_cubic(T_world_from_robot, T_world_from_gate)
+            y = a * x ** 3 + b * x ** 2
         
         target_in_gate_frame = np.array([x,y])
         
@@ -158,8 +241,10 @@ class SlalomController(ctrl.Controller):
     def update(self, time, dt, robot_state, camera_data):
 
         T_world_from_robot = robot_state.odom_pose
+        self.robot_state = robot_state
 
         gates = project4.find_gates(T_world_from_robot, camera_data.detections)
+        print(gates)
 
         if self.command_index >= len(self.commands):
 
@@ -202,7 +287,7 @@ class SlalomController(ctrl.Controller):
                         print('will do "{}" action until {}-{} gate is found'.format(
                             *self.commands[self.command_index]))
 
-
+            self.old_odom = robot_state.odom_pose
             return cmd_vel
         
 ######################################################################
