@@ -110,32 +110,38 @@ class SlalomController(ctrl.Controller):
 
     # Given an array of particles x and a measurement z, return a new array
     # that is the result of the measurement step of the particle filter.
-    def measurement_update(self, x, z, sigma_z, T_world_from_gate):
+    def measurement_update(self, x, z, sigma_z, T_world_from_robot, T_world_from_gate):
 
         # TODO: compute weights for each particle by evaluating the Gaussian
         # probability density function associated with the sensor model.
-        #weights=[scipy.stats.norm(depth_at(a),sigma_z).pdf(z) for a in x]
         z = np.expand_dims(z, axis = 1)
         #print(x)
         print(z)
-        xnew = T_world_from_gate.transform_inv(self.particles)
-        print(xnew)
-        weights = np.exp( - (xnew - z) ** 2 /(2 * sigma_z ** 2))
+        gate_in_world_frame = T_world_from_gate.position
+        gate_in_robot_frame = T_world_from_robot.transform_inv(gate_in_world_frame)
+        print("gate in robot frame: ", gate_in_robot_frame)
+        weights = np.zeros(np.shape(x))
+        for col in range(x.shape[1]):
+            particle = x[:,col]
+            particle_in_gate_frame = T_world_from_gate.transform_inv(particle)
+            print('particle in gate frame: ', particle_in_gate_frame)
+            weights[:,col] = np.exp( - (-particle_in_gate_frame-gate_in_robot_frame) ** 2 /(2 * sigma_z ** 2))
+
+        weights=np.multiply(weights[:,0],weights[:,1])    
+        weights /= np.sum(weights)
         print("weights normalized:", weights)
 
-        weights=np.divide(weights,np.expand_dims(np.sum(weights, axis = 1), axis = 1))
         # TODO: resample particles using weights by calling np.random.choice
         #print("weights normalized:", weights)
         # This is an incorrect implementation that just gives a random subset
         # by selecting uniformly with replacement. You should delete this and
         # complete the tasks above.
-        for idx,row in enumerate(weights):
-            x[idx,:]=np.random.choice(a = row, p=weights[idx], size=len(row))
-        return x
+        idx=np.random.choice(np.arange(len(weights)), p=weights, size=len(weights))
+        return x[:,idx]
 
     def particle_filter(self, T_world_from_robot, T_world_from_gate):
-        sigma_x = .01
-        sigma_y = .01
+        sigma_x = .05
+        sigma_y = .05
         new_position = T_world_from_robot.position
 
         if self.old_odom is not None:
@@ -157,7 +163,7 @@ class SlalomController(ctrl.Controller):
             measurement = T_world_from_gate.position
             #print("measurement", measurement)
             #print("mean position", np.mean(self.particles, axis = 1))
-            self.particles = self.measurement_update(self.particles, measurement, sigma_y, T_world_from_gate)
+            self.particles = self.measurement_update(self.particles, measurement, sigma_y, T_world_from_robot, T_world_from_gate)
 
         return np.mean(self.particles, axis=1)
 
@@ -263,7 +269,7 @@ class SlalomController(ctrl.Controller):
                     
                     
                 self.gate = detected_gate
-
+            #Do particle
             if self.gate is None:
 
                 cmd_vel = self.do_action(action, camera_data.detections['blue_tape'])
