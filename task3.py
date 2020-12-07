@@ -66,7 +66,7 @@ class SlalomController(ctrl.Controller):
         (p,q) = robot_in_gate_frame
         tan_theta = q/p
 
-        print(tan_theta)
+        #print(tan_theta)
 
         A = np.array([[p**3, p ** 2],
                       [3 * p ** 2, 2 * p]])
@@ -100,36 +100,49 @@ class SlalomController(ctrl.Controller):
         # TODO: add the action to the state array to get the un-corrupted
         # new states
         u = np.expand_dims(u,axis=1)
-        x_new= x+ np.multiply(np.ones_like(x), u)
-
+        u = np.multiply(np.ones_like(x), u)
+        x_new= x+ u
+        print("x after action step:", x_new)
+        
         # TODO: add Gaussian noise with standard deviation sigma_x by
         # calling numpy.random.normal- make sure each state x gets
         # independent noise applied to it
-        x_new+=np.random.normal(0,sigma_x,size=np.shape(x_new))
+        noise =  np.random.normal(0,sigma_x,size=np.shape(x_new))
+        print("noise: ", noise)
+        x_new+=noise
         return x_new
 
     # Given an array of particles x and a measurement z, return a new array
     # that is the result of the measurement step of the particle filter.
-    def measurement_update(self, x, z, sigma_z, T_world_from_robot, T_world_from_gate):
+    def measurement_update(self, x, z, sigma_z, T_world_from_robot, T_world_from_gate, action):
+        if T_world_from_gate is None:
+            weights = np.ones(np.shape(x)[1])
+            print("weights when no measurement: ", weights)
+            weights /= np.sum(weights)
 
+
+            idx=np.random.choice(np.arange(len(weights)), p=weights, size=len(weights))
+            return x[:,idx]
         # TODO: compute weights for each particle by evaluating the Gaussian
         # probability density function associated with the sensor model.
         z = np.expand_dims(z, axis = 1)
         #print(x)
-        print(z)
-        gate_in_world_frame = T_world_from_gate.position
+        gate_in_world_frame = T_world_from_gate.inverse().position
         gate_in_robot_frame = T_world_from_robot.transform_inv(gate_in_world_frame)
+        
         print("gate in robot frame: ", gate_in_robot_frame)
         weights = np.zeros(np.shape(x))
+        print("empty weights:", weights)
         for col in range(x.shape[1]):
             particle = x[:,col]
             particle_in_gate_frame = T_world_from_gate.transform_inv(particle)
             print('particle in gate frame: ', particle_in_gate_frame)
-            weights[:,col] = np.exp( - (-particle_in_gate_frame-gate_in_robot_frame) ** 2 /(2 * sigma_z ** 2))
+            weights[:,col] = np.exp( - (particle_in_gate_frame-gate_in_robot_frame) ** 2 /(2 * sigma_z ** 2))
 
-        weights=np.multiply(weights[:,0],weights[:,1])    
+        weights=np.multiply(weights[0,:],weights[1,:])   
+        print("weights unnormalized:", weights) 
         weights /= np.sum(weights)
-        print("weights normalized:", weights)
+        #print("weights normalized:", weights)
 
         # TODO: resample particles using weights by calling np.random.choice
         #print("weights normalized:", weights)
@@ -140,20 +153,34 @@ class SlalomController(ctrl.Controller):
         return x[:,idx]
 
     def particle_filter(self, T_world_from_robot, T_world_from_gate):
-        sigma_x = .05
-        sigma_y = .05
+        sigma_x = 0.0
+        sigma_y = .01
         new_position = T_world_from_robot.position
 
         if self.old_odom is not None:
-            old_position = self.old_odom.position
+            """old_position = self.old_odom.position
 
-            action = new_position - old_position
+            print("old position: ",old_position)
+            print("new position: ", new_position)
+
+            action = new_position - old_position"""
+
+            T_cur_from_previous = T_world_from_robot.inverse() * self.old_odom
+            action = T_cur_from_previous.inverse().position
+
         else:
             action = new_position
 
-        #Motion Step
-        self.particles = self.motion_update(self.particles, action, sigma_x)
 
+        print('action: ',action)
+        print()
+        print("robot position in world frame: ", T_world_from_robot.position)
+
+        #Motion Step
+        print("x from odometry: ", T_world_from_robot.position)
+        self.particles = self.motion_update(self.particles, action, sigma_x)
+        print("particles after motion step: ", self.particles)
+        #print("T world from gate: ",T_world_from_gate)
         if T_world_from_gate is not None:
             #Measurement Step
 
@@ -163,7 +190,11 @@ class SlalomController(ctrl.Controller):
             measurement = T_world_from_gate.position
             #print("measurement", measurement)
             #print("mean position", np.mean(self.particles, axis = 1))
-            self.particles = self.measurement_update(self.particles, measurement, sigma_y, T_world_from_robot, T_world_from_gate)
+            self.particles = self.measurement_update(self.particles, measurement, sigma_y, T_world_from_robot, T_world_from_gate, action)
+            print("particles after measurement step:", self.particles)
+        else:
+            self.particles = self.measurement_update(self.particles, None, sigma_y, T_world_from_robot, T_world_from_gate)
+            
 
         return np.mean(self.particles, axis=1)
 
@@ -250,7 +281,7 @@ class SlalomController(ctrl.Controller):
         self.robot_state = robot_state
 
         gates = project4.find_gates(T_world_from_robot, camera_data.detections)
-        print(gates)
+        #print(gates)
 
         if self.command_index >= len(self.commands):
 
@@ -271,7 +302,7 @@ class SlalomController(ctrl.Controller):
                 self.gate = detected_gate
             #Do particle
             if self.gate is None:
-
+                self.particle_filter(T_world_from_robot, None)
                 cmd_vel = self.do_action(action, camera_data.detections['blue_tape'])
 
             else:
