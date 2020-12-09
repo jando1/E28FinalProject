@@ -109,46 +109,30 @@ class SlalomController(ctrl.Controller):
 
 
         if self.old_odom is not None:
-            """old_position = self.old_odom.position
 
-            print("old position: ",old_position)
-            print("new position: ", new_position)
-
-            action = new_position - old_position"""
             T_prev_from_cur = self.old_odom.inverse() * T_world_from_robot
 
         else:
             T_prev_from_cur = transform2d.Transform2D(0,0,0)
 
 
-        print('action: ',T_prev_from_cur)
 
-        new_particles = pf.motion_update(particles, T_prev_from_cur, sigma_motion_xy, sigma_motion_theta)
+        self.particles = pf.motion_update(self.particles, T_prev_from_cur, sigma_motion_xy, sigma_motion_theta)
 
         if T_world_from_gate is not None:
             #Measurement Step
             
             T_robot_from_gate = T_world_from_robot.inverse() * T_world_from_gate
-        
-
-            #print("measurement", measurement
-            #print("mean position", np.mean(self.particles, axis = 1))
-            self.particles, weights = pf.measurement_update(particles, 
+    
+            self.particles, weights = pf.measurement_update(self.particles, 
                        T_robot_from_gate, T_world_from_gate, 
                        sigma_meas_xy, sigma_meas_theta)
-
-            print("particles after measurement step:", self.particles)
         
         x = []
         y = []
         for idx, particle in enumerate(self.particles):
             x.append(particle.position[0])
             y.append(particle.position[1])
-
-        print("robot position from odometery: ", T_world_from_robot.position)
-        print("robot position from particle filter: ", np.array([np.mean(x), np.mean(y)]))
-
-        
 
         return self.average_particle(self.particles)
 
@@ -170,8 +154,6 @@ class SlalomController(ctrl.Controller):
         # Establish the position of the robot in the gate coordinate frame. 
         T_robot_from_gate = T_world_from_robot_pursuit.inverse() * T_world_from_gate
         robot_in_gate_frame = T_robot_from_gate.inverse().position
-        #print(robot_in_gate_frame[1])
-        #print("Robot angle cotangent in gate frame:", robot_in_gate_frame[1]/robot_in_gate_frame[0])
 
         #print("Robot position in gate frame: ", robot_in_gate_frame)
         alpha = 0.7
@@ -241,9 +223,6 @@ class SlalomController(ctrl.Controller):
 
         T_world_from_robot = robot_state.odom_pose
         oldpose = robot_state.odom_pose
-        #print("HERE!!!!!!!!")
-        #self.robot_state = robot_state
-        print("robot state at beginning: ", oldpose.position)
         gates = project4.find_gates(T_world_from_robot, camera_data.detections)
         #print(gates)
 
@@ -289,8 +268,6 @@ class SlalomController(ctrl.Controller):
                             *self.commands[self.command_index]))
 
             self.old_odom = oldpose
-            print("Defined old odom as", oldpose.position)
-            print("******************")
             return cmd_vel
         
 ######################################################################
