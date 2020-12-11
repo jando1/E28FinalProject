@@ -70,6 +70,9 @@ class PracticeController(ctrl.Controller):
         x = robot_in_gate_frame[0] + alpha
         y = a * x ** 3 + b * x ** 2
         
+        if x > 0:
+            y = 0
+
         target_in_gate_frame = np.array([x,y])
         
         target_in_robot_frame=T_robot_from_gate.transform_fwd(target_in_gate_frame)
